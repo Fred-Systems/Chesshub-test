@@ -109,6 +109,137 @@
             padding: 20px;
         }
     </style>
+<script type="module">
+        import { auth, db } from './firebase-config.js';
+        import { GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
+import { collection, query, where, getDocs, orderBy, limit, doc, getDoc, addDoc, serverTimestamp, deleteDoc } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
+
+        // 1. LOGIN FUNCTION
+        window.loginUser = async () => {
+            const provider = new GoogleAuthProvider();
+            try { 
+                await signInWithPopup(auth, provider); 
+            } catch (e) { 
+                console.error("Login Error:", e); 
+            }
+        };
+
+        // 2. LOGOUT FUNCTION
+        window.logoutUser = () => {
+            signOut(auth).then(() => { 
+                location.reload(); 
+            }).catch((e) => {
+                console.error("Logout Error:", e);
+            });
+        };
+
+        // 3. AUTH WATCHER (Handles UI, Admin Crown, and Sidebar Status)
+// 3. AUTH WATCHER (Handles UI, Admin Crown, and Sidebar Status)
+        onAuthStateChanged(auth, async (user) => {
+            const display = document.getElementById('auth-status-display');
+            const logoutBtn = document.getElementById('logout-btn');
+            const loginBtn = document.getElementById('login-btn-header');
+            const sidebarStatus = document.getElementById('auth-status');
+            const saveBtn = document.getElementById('save-game-btn'); // Finds your new button
+
+            if (user) {
+                // LOGGED IN: Show Logout and Save buttons
+                if(loginBtn) loginBtn.classList.add('hidden');
+                if(logoutBtn) logoutBtn.classList.remove('hidden');
+                if(saveBtn) saveBtn.classList.remove('hidden'); 
+                
+                if(display) {
+                    display.innerText = user.displayName;
+                    display.classList.remove('text-gray-500');
+                    display.classList.add('text-green-400');
+                }
+                if(sidebarStatus) sidebarStatus.innerText = `Logged in as ${user.displayName}`;
+
+                // Check for Admin
+                try {
+                    const userDoc = await getDoc(doc(db, "users", user.uid));
+                    if (userDoc.exists() && userDoc.data().role === 'admin') {
+                        if(display) {
+                            display.innerText = "👑 " + user.displayName;
+                            display.classList.replace('text-green-400', 'text-yellow-400');
+                        }
+                    }
+                } catch (e) { console.error(e); }
+
+                // Automatically load history when the user logs in
+                window.loadHistory();
+
+            } else {
+                // LOGGED OUT: Hide Logout and Save buttons
+                if(display) {
+                    display.innerText = "Guest";
+                    display.classList.add('text-gray-500');
+                    display.classList.remove('text-green-400', 'text-yellow-400');
+                }
+                if(loginBtn) loginBtn.classList.remove('hidden');
+                if(logoutBtn) logoutBtn.classList.add('hidden');
+                if(saveBtn) saveBtn.classList.add('hidden'); 
+                if(sidebarStatus) sidebarStatus.innerText = "Account Required";
+            }
+        });
+
+        // 4. LOAD HISTORY FUNCTION
+// 4. SAVE FUNCTION
+        window.saveGameToFirebase = async () => {
+            if (!auth.currentUser) { alert("Please login to save games!"); return; }
+            if (game.history().length === 0) { alert("Start a game first!"); return; }
+            try {
+                await addDoc(collection(db, "games"), {
+                    userId: auth.currentUser.uid,
+                    pgn: game.pgn(),
+                    timestamp: serverTimestamp()
+                });
+                alert("Game saved to cloud!");
+                window.loadHistory(); 
+            } catch (e) { console.error(e); }
+        };
+
+        // 5. DELETE FUNCTION
+        window.deleteGame = async (gameId, event) => {
+            event.stopPropagation(); 
+            if (!confirm("Delete this game?")) return;
+            try {
+                await deleteDoc(doc(db, "games", gameId));
+                window.loadHistory(); 
+            } catch (e) { console.error(e); }
+        };
+
+        // 6. LOAD HISTORY
+        window.loadHistory = async () => {
+            const list = document.getElementById('history-list');
+            if (!auth.currentUser) {
+                list.innerHTML = "<p class='text-[10px] text-gray-500'>Login to see saved games</p>";
+                return;
+            }
+            list.innerHTML = "<p class='text-[10px] animate-pulse text-blue-400'>Loading cloud games...</p>";
+            try {
+                const q = query(collection(db, "games"), where("userId", "==", auth.currentUser.uid), orderBy("timestamp", "desc"));
+                const snap = await getDocs(q);
+                list.innerHTML = "";
+                if (snap.empty) { list.innerHTML = "<p class='text-[10px] text-gray-500'>No saved games.</p>"; return; }
+                
+                snap.forEach(gameDoc => {
+                    const data = gameDoc.data();
+                    const div = document.createElement('div');
+                    div.className = "group bg-white/5 p-3 rounded border border-white/5 hover:border-blue-500/50 cursor-pointer mb-2 flex justify-between items-center";
+                    div.innerHTML = `
+                        <div class="flex-1">
+                            <div class='text-[8px] text-gray-500 font-bold uppercase'>${data.timestamp?.toDate().toLocaleDateString() || 'Recent'}</div>
+                            <div class='text-[10px] truncate text-gray-300 w-32'>${data.pgn}</div>
+                        </div>
+                        <button onclick="deleteGame('${gameDoc.id}', event)" class="p-2 text-gray-600 hover:text-red-500"><i class="fa-solid fa-trash-can"></i></button>
+                    `;
+                    div.onclick = () => { game.load_pgn(data.pgn); board.position(game.fen()); updateStatus(); switchTab('moves'); };
+                    list.appendChild(div);
+                });
+            } catch (e) { console.error(e); }
+        };
+    </script>
 </head>
 <body class="flex flex-col">
 
@@ -144,15 +275,24 @@
         </div>
     </div>
 
-    <header class="bg-[#262421] px-4 py-2 flex items-center justify-between border-b border-white/5 shrink-0">
+<header class="bg-[#262421] px-4 py-2 flex items-center justify-between border-b border-white/5 shrink-0">
         <div class="flex items-center gap-2">
             <i class="fa-solid fa-fish text-blue-500 text-xl"></i>
             <h1 class="font-bold text-xs tracking-tight uppercase">FieshChess V2.0</h1>
         </div>
-        <div class="flex gap-2">
-            <button onclick="toggleSidebar('feedback')" class="p-2 bg-white/5 rounded hover:bg-white/10 text-pink-400"><i class="fa-solid fa-comment-dots"></i></button>
-            <button onclick="toggleSidebar('config')" class="p-2 bg-white/5 rounded hover:bg-white/10"><i class="fa-solid fa-sliders"></i></button>
-            <button onclick="toggleSidebar('book')" class="p-2 bg-white/5 rounded text-orange-400 hover:bg-white/10"><i class="fa-solid fa-book-open"></i></button>
+
+        <div class="flex items-center gap-3">
+            <span id="auth-status-display" class="text-[10px] font-bold uppercase text-gray-500">Guest</span>
+            
+            <button id="login-btn-header" onclick="loginUser()" class="bg-blue-600 hover:bg-blue-700 px-3 py-1 rounded text-[10px] font-black uppercase transition-colors">Login</button>
+            
+            <button id="logout-btn" onclick="logoutUser()" class="hidden bg-red-600/20 text-red-400 px-2 py-1 rounded text-[9px] font-black uppercase">Logout</button>
+
+            <div class="flex gap-2 border-l border-white/10 pl-3 ml-1">
+                <button onclick="toggleSidebar('feedback')" class="p-2 bg-white/5 rounded hover:bg-white/10 text-pink-400"><i class="fa-solid fa-comment-dots"></i></button>
+                <button onclick="toggleSidebar('config')" class="p-2 bg-white/5 rounded hover:bg-white/10"><i class="fa-solid fa-sliders"></i></button>
+                <button onclick="toggleSidebar('book')" class="p-2 bg-white/5 rounded text-orange-400 hover:bg-white/10"><i class="fa-solid fa-book-open"></i></button>
+            </div>
         </div>
     </header>
 
@@ -218,12 +358,20 @@
             </div>
 
             <div id="content-import" class="hidden flex-1 overflow-y-auto p-4 space-y-4">
-                <div class="flex gap-2">
-                    <input id="search-username" type="text" placeholder="Chess.com Username..." class="flex-1 bg-black/40 border border-white/10 rounded px-3 py-2 text-xs">
-                    <button onclick="getProfile()" class="bg-blue-600 px-4 rounded text-xs font-bold">SEARCH</button>
-                </div>
+    <div class="p-3 bg-blue-600/10 border border-blue-500/20 rounded-lg mb-4">
+        <p id="auth-status" class="text-[10px] font-bold uppercase text-blue-400 mb-2">Account Required for Online Features</p>
+        <button onclick="loginUser()" class="w-full bg-blue-600 py-2 rounded text-xs font-bold">LOGIN WITH GOOGLE</button>
+<button id="save-game-btn" onclick="saveGameToFirebase()" class="w-full mt-3 bg-green-600/20 text-green-400 py-2 rounded text-[10px] font-black uppercase border border-green-600/30 hover:bg-green-600/40 transition-all">
+    <i class="fa-solid fa-cloud-arrow-up mr-2"></i> Save Current Game
+</button>
+    </div>
+
+    <div class="flex gap-2">
+        <input id="search-username" type="text" placeholder="Chess.com Username..." class="flex-1 bg-black/40 border border-white/10 rounded px-3 py-2 text-xs">
+        <button onclick="getProfile()" class="bg-blue-600 px-4 rounded text-xs font-bold">SEARCH</button>
+    </div>
                 <div id="profile-card" class="hidden p-3 bg-black/60 border border-white/10 rounded-lg space-y-3"></div>
-                <div id="game-list" class="space-y-1"></div>
+                <div id="history-list" class="space-y-1"></div>
                 <button id="btn-more" onclick="fetchMoreGames()" class="hidden w-full bg-white/5 py-2 rounded text-[9px] font-black uppercase">Load 20 More</button>
             </div>
         </div>
@@ -1221,7 +1369,21 @@
             history = [game.fen()]; 
             moveData = []; 
             viewIndex = -1; 
-            initBoard(); 
+            initBoard();
+            function resetGame() {
+    // ... your existing code ...
+
+    // ADD THIS: Save to Firestore
+    if (auth.currentUser) {
+        const gameData = {
+            pgn: game.pgn(),
+            date: new Date(),
+            userId: auth.currentUser.uid
+        };
+        // Use the 'db' variable to save to a "games" collection
+        console.log("Saving game to Firestore..."); 
+    }
+}
         }
 
         function navigateGame(d) {
